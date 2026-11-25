@@ -28,6 +28,7 @@ import {
   Star,
 } from "lucide-react";
 import { Icon } from "../ui/Icon";
+import { PersonalWorkbench } from "./PersonalWorkbench";
 import { HoverButton } from "../ui/HoverButton";
 import { useEditorUiStore, type MediaSubTabId } from "../../store/uiStore";
 import {
@@ -323,7 +324,10 @@ export function MediaPanel() {
               <StickerPanel key={`${projectEpoch}:${projectPath}`} active={active} />
             ) : active ? (
               tab === "material" || tab === "audio" ? (
-                <MediaTab kind={tab as MediaTabKind} />
+                <>
+                  {tab === "material" ? <PersonalWorkbench /> : null}
+                  <MediaTab kind={tab as MediaTabKind} />
+                </>
               ) : tab === "music" ? (
                 <MusicTab />
               ) : tab === "transition" ? (

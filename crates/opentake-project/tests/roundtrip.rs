@@ -6,8 +6,8 @@ mod common;
 use std::path::Path;
 
 use opentake_domain::{
-    Clip, ClipType, MediaManifest, MediaManifestEntry, MediaSource, Timeline, Track, Transition,
-    TransitionKind,
+    Clip, ClipType, MediaManifest, MediaManifestEntry, MediaSource, ProtectedField, Rgba,
+    TextAlignment, TextStyle, Timeline, Track, Transition, TransitionKind,
 };
 use opentake_project::{GenerationLog, GenerationLogEntry, Project};
 
@@ -344,4 +344,59 @@ fn save_preserves_media_and_chat_directories() {
         b"MEDIA"
     );
     assert!(bundle.join("chat-sessions").join("s1.json").is_file());
+}
+
+#[test]
+fn protected_text_fields_survive_save_and_reopen() {
+    let tmp = TempDir::new("protected-text");
+    let bundle = tmp.child("Synth.opentake");
+    let mut project = Project::new(bundle.clone());
+    let mut timeline = Timeline::new();
+    timeline.fps = 30;
+    timeline.width = 1920;
+    timeline.height = 1080;
+    let mut track = Track::new("title-track", ClipType::Video);
+    let mut clip = Clip::new("title-1", "", 0, 90);
+    clip.media_type = ClipType::Text;
+    clip.source_clip_type = ClipType::Text;
+    clip.text_content = Some("合成标题".into());
+    clip.text_style = Some(TextStyle {
+        font_name: "Songti".into(),
+        font_size: 64.0,
+        alignment: TextAlignment::Left,
+        color: Rgba::new(0.1, 0.2, 0.3, 1.0),
+        ..TextStyle::default()
+    });
+    clip.transform.center_x = 0.25;
+    clip.transform.center_y = 0.8;
+    clip.protected_fields = vec![
+        ProtectedField::TextFontSize,
+        ProtectedField::TextColor,
+        ProtectedField::TransformPosition,
+    ];
+    track.clips.push(clip);
+    timeline.tracks.push(track);
+    project.timeline = timeline;
+
+    project.save().expect("save synthetic project");
+    let reopened = Project::open(&bundle).expect("reopen synthetic project");
+    assert!(!reopened.compatibility().is_read_only());
+    let clip = &reopened.timeline.tracks[0].clips[0];
+    assert_eq!(clip.id, "title-1");
+    assert_eq!(clip.text_content.as_deref(), Some("合成标题"));
+    let style = clip.text_style.as_ref().unwrap();
+    assert_eq!(style.font_name, "Songti");
+    assert_eq!(style.font_size, 64.0);
+    assert_eq!(style.alignment, TextAlignment::Left);
+    assert_eq!(style.color, Rgba::new(0.1, 0.2, 0.3, 1.0));
+    assert_eq!(clip.transform.center_x, 0.25);
+    assert_eq!(clip.transform.center_y, 0.8);
+    assert_eq!(
+        clip.protected_fields,
+        vec![
+            ProtectedField::TextFontSize,
+            ProtectedField::TextColor,
+            ProtectedField::TransformPosition,
+        ]
+    );
 }

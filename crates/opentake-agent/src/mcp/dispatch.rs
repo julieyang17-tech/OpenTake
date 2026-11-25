@@ -25,7 +25,7 @@ use opentake_core::OwnedUndoResult;
 use opentake_domain::{AnimPair, Crop, Interpolation, Keyframe, KeyframeTrack};
 use opentake_domain::{
     ChromaKey, ColorGrade, Effect, GenerationJobStatus, LiftGammaGain, Mask, MaskShape,
-    MediaManifest, Point2, Rgb, Rgba, TextStyle, Timeline, Transform, VideoType,
+    MediaManifest, Point2, Rgb, Rgba, TextStyle, TextStylePatch, Timeline, Transform, VideoType,
 };
 use opentake_media::analysis::{
     detect_beats, detect_silences, BeatDetectionConfig, SilenceDetectionConfig,
@@ -2714,6 +2714,13 @@ impl Dispatcher {
         manifest: &MediaManifest,
     ) -> Result<ToolResult, ToolError> {
         let a: SetClipPropertiesArgs = decode_tool_args(args, "")?;
+        if let Some(size) = a.font_size {
+            if !size.is_finite() || size <= 0.0 {
+                return Err(ToolError::new(
+                    "set_clip_properties: fontSize must be finite and > 0",
+                ));
+            }
+        }
         let clip_ids = a.clip_ids.clone();
         let properties = ClipProperties {
             duration_frames: a.duration_frames,
@@ -2724,7 +2731,9 @@ impl Dispatcher {
             opacity: a.opacity,
             transform: None,
             text_content: a.content.clone(),
+            text_style_patch: text_style_patch_from_args(&a),
             reversed: a.reversed,
+            respect_protected_fields: true,
             ..Default::default()
         };
         let Some(transform_patch) = a.transform else {
@@ -4260,6 +4269,23 @@ fn build_text_style(
         style.alignment = a;
     }
     style
+}
+
+fn text_style_patch_from_args(
+    args: &crate::tools::args::SetClipPropertiesArgs,
+) -> Option<TextStylePatch> {
+    let patch = TextStylePatch {
+        font_name: args.font_name.clone(),
+        font_size: args.font_size,
+        color: args.color.as_deref().and_then(Rgba::from_hex),
+        alignment: args.alignment.as_deref().and_then(parse_alignment),
+        ..Default::default()
+    };
+    if patch.is_empty() {
+        None
+    } else {
+        Some(patch)
+    }
 }
 
 fn parse_alignment(s: &str) -> Option<opentake_domain::TextAlignment> {

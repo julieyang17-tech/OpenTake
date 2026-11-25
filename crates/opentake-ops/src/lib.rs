@@ -22,6 +22,7 @@ pub mod engines;
 pub mod id;
 pub mod intent;
 pub mod ops;
+pub mod workbench;
 
 // --- Pure engines ---
 pub use engines::{
@@ -37,6 +38,10 @@ pub use command::{
 };
 pub use editor_state::{DocSnapshot, EditorState};
 pub use id::{IdGen, SeqIdGen};
+pub use workbench::{
+    plan_user_rough_cut, PlannedRoughCut, PlannedRoughCutClip, PlannedTitle, RoughCutError,
+    UserRoughCutItem,
+};
 
 // --- Internal ops (re-exported for the core/command-router layer) ---
 pub use ops::move_clips::ClipMove;

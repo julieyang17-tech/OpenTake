@@ -101,6 +101,28 @@ pub struct KeyframeTrackWireField {
     pub value_shape: KeyframeValueWireShape,
 }
 
+/// A clip field the user has protected from automatic edits.
+///
+/// Manual `SetClipProperties` still writes these fields. An edit that sets
+/// `respect_protected_fields` leaves them unchanged. The names are the on-disk
+/// camelCase values.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ProtectedField {
+    TextContent,
+    TextFontName,
+    TextFontSize,
+    TextFontScale,
+    TextColor,
+    TextAlignment,
+    TextShadow,
+    TextBackground,
+    TextBorder,
+    TransformPosition,
+    TransformScale,
+    TransformRotation,
+}
+
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Clip {
@@ -186,6 +208,10 @@ pub struct Clip {
         skip_serializing_if = "Option::is_none"
     )]
     pub text_style: Option<TextStyle>,
+    /// Fields a person has locked. Automatic property edits skip these fields.
+    /// Empty means nothing is locked. Omitted on older projects.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub protected_fields: Vec<ProtectedField>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub caption_translation_input: Option<CaptionTranslationInput>,
 
@@ -303,6 +329,7 @@ impl Clip {
         "nestedSequenceId",
         "textContent",
         "textStyle",
+        "protectedFields",
         "captionTranslationInput",
         "opacityTrack",
         "positionTrack",
@@ -399,6 +426,7 @@ impl Clip {
             nested_sequence_id: None,
             text_content: None,
             text_style: None,
+            protected_fields: Vec::new(),
             caption_translation_input: None,
             opacity_track: None,
             position_track: None,

@@ -1,0 +1,54 @@
+# 个人 Mac 初剪工作台
+
+> 状态：implementation-backed · 阶段：本机桌面最小闭环 · 日期：2026-11-25
+> 这是在现有 OpenTake（Rust + Tauri 2）上的小幅补充，不是新的在线剪辑，也不是从零做的剪辑器。
+> 许可仍是仓库根目录的 GPL-3.0-or-later。这里没有复制闭源 Pro 源码。
+
+## 你怎么用
+
+在自己的 Mac 上打开 OpenTake 桌面应用，不通过网页，也不通过 Skill。
+
+1. 新建或打开一个工程。素材留在本机，不上传。
+2. 在左侧「素材」里导入文件。上面的「个人初剪」只显示素材名称。
+3. 勾选要用的素材，用上下箭头排好顺序，可以写一句标题，然后点「按这个顺序放到时间线」。
+4. 顺序就是你勾选的顺序。这一步不分析画面，不自动分类，也不挑选效果。图片或没有时长的素材按 5 秒计算，其余时长按项目帧率向零取整。
+5. 点时间线上的标题。右侧可以改字体、字号、颜色、对齐、装饰，以及水平和垂直位置。预览沿用现有文字渲染。
+6. 需要保住手调结果时，勾选「锁定字号」「锁定字体、颜色、对齐和装饰」或「锁定位置」。之后的自动修改会跳过这些项。你自己仍然可以改。
+7. 用窗口顶部现有的保存和导出。保存后再打开，文字参数和锁定仍然在。
+
+自动修改包括 Agent 的 `set_clip_properties`，以及检查器里接受一条 AI 建议、智能重构图。它们现在带上“尊重锁定”。只改字号时不会把颜色、对齐和装饰重置掉。
+
+## 已实现
+
+- 沿用现有导入、时间线、预览、工程保存和导出命令。
+- 用户自选顺序的初剪命令 `placeUserRoughCut`，一次撤销。
+- 文字局部更新 `textStylePatch`。
+- 字段锁定 `setProtectedFields`，自动编辑跳过锁定字段，保存后仍在。
+- 中文界面文案。
+
+## 未实现
+
+- 按效果类型自动选择。
+- 教学整句、完整动作演示。
+- 多机位。
+- 剪映工程、口播、访谈时间线。
+- 模型训练，或让程序理解私人素材内容。
+- 新的品牌外观、账号和付费接口。
+
+## 本轮未测，不能写成已经通过
+
+- Mac 安装包、签名、公证。
+- 在真实 Mac 上的点击、预览和导出。
+- 4K HEVC 性能。
+- 剪映能否打开导出的成片或工程。
+- 云端 Linux 没有 Metal。现有合成器只启用 `wgsl` 和 `metal`。本轮在这台机器上运行 `cargo test -p opentake-render --test gpu_smoke`，五条合成测试都打印 `no suitable GPU adapter available` 后跳过。因此没有可解码的应用导出成片，不能把 GPU 导出说成已通过。
+
+要在 Mac 上验收，需要一台可运行的 macOS 构建环境或用户明确同意后的本机操作。本轮不在用户的 Mac 上安装或写入。
+
+## Mac 打包路线（2026-11-25 复核）
+
+现有 `.github/workflows/release.yml` 能在 `macos-14` 上打出 ARM64 `.app` 和 `.dmg`，但只服务 `appergb/OpenTake` 的 tag 发布，并且要求 `TAURI_SIGNING_PRIVATE_KEY`。本 fork 不走这条发布流程，也不取签名密钥。
+
+新增 `.github/workflows/mac-adhoc-test-bundle.yml` 只接受手动 `workflow_dispatch`。它在公开仓库的标准 `macos-14` 上做 ad-hoc 签名的 app 和 DMG，关闭 updater 产物，上传 Actions artifact，不创建 Release。本环境是 `x86_64-unknown-linux-gnu`，没有 macOS SDK，不能交叉产出 `.app`。这个 workflow 文件已准备好，但没有被触发。
+
+本机 ffmpeg 可以编码并解码一份标注为 `OPENTAKE_SYNTHETIC_4K_HEVC_NOT_USER_MEDIA` 的 8 帧 3840×2160 HEVC。那只是合成探针，不是应用导入、预览或 GPU 导出。

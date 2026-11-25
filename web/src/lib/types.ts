@@ -399,6 +399,31 @@ export interface AudioDenoise {
   previewEnabled: boolean;
 }
 
+export type ProtectedField =
+  | "textContent"
+  | "textFontName"
+  | "textFontSize"
+  | "textFontScale"
+  | "textColor"
+  | "textAlignment"
+  | "textShadow"
+  | "textBackground"
+  | "textBorder"
+  | "transformPosition"
+  | "transformScale"
+  | "transformRotation";
+
+export interface TextStylePatch {
+  fontName?: string;
+  fontSize?: number;
+  fontScale?: number;
+  color?: Rgba;
+  alignment?: TextAlignment;
+  shadow?: Shadow;
+  background?: Fill;
+  border?: Fill;
+}
+
 export interface Clip {
   id: string;
   mediaRef: string;
@@ -423,6 +448,7 @@ export interface Clip {
   nestedSequenceId?: string;
   textContent?: string;
   textStyle?: TextStyle;
+  protectedFields?: ProtectedField[];
   captionTranslationInput?: CaptionTranslationInput;
   opacityTrack?: KeyframeTrack<number>;
   positionTrack?: KeyframeTrack<AnimPair>;
@@ -443,6 +469,13 @@ export interface Clip {
 }
 
 // MARK: - Command DTOs (mirror src-tauri EditRequest)
+
+export interface UserRoughCutItemReq {
+  mediaRef: string;
+  mediaType: ClipType;
+  durationFrames: number;
+  hasAudio: boolean;
+}
 
 export interface ClipEntryReq {
   mediaRef: string;
@@ -503,6 +536,10 @@ export interface ClipPropertiesReq {
   /** Text style for a text clip (font / size / color / alignment / shadow /
    *  background / border). Replaces the clip's whole `textStyle`. */
   textStyle?: TextStyle;
+  /** Writes only the fields it carries. Other manual style fields stay. */
+  textStylePatch?: TextStylePatch;
+  /** Automatic edits set this so locked fields are skipped. */
+  respectProtectedFields?: boolean;
   /** Per-clip crop insets (normalized 0–1). Clears `cropTrack` on the backend. */
   crop?: Crop;
   /** Fade-in length in frames. Clamped to clip duration on the backend. */
@@ -589,6 +626,13 @@ export type EditRequest =
   | { type: "freezeFrame"; clipId: string; atFrame: number; durationFrames: number }
   | { type: "trimClips"; edits: TrimEditReq[] }
   | { type: "setClipProperties"; clipIds: string[]; properties: ClipPropertiesReq }
+  | { type: "setProtectedFields"; clipId: string; fields: ProtectedField[] }
+  | {
+      type: "placeUserRoughCut";
+      items: UserRoughCutItemReq[];
+      title?: string;
+      titleDurationFrames: number;
+    }
   | { type: "setTransformAtFrame"; clipId: string; frame: number; transform: Transform }
   | { type: "setKeyframes"; clipId: string; property: KeyframeProperty; payload: KeyframePayloadReq }
   | { type: "stampKeyframe"; clipId: string; property: KeyframeProperty; frame: number }

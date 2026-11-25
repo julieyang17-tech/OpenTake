@@ -38,6 +38,8 @@ import type {
   Interpolation,
   KeyframePayloadReq,
   KeyframeProperty,
+  ProtectedField,
+  UserRoughCutItemReq,
   KeyframeValueReq,
   MaskInput,
   LutReference,
@@ -83,6 +85,8 @@ export const EDIT_GESTURE_COMMAND_MATRIX = [
   { gesture: "freeze frame", action: "freezeFrame", requestType: "freezeFrame", backend: "FreezeFrame" },
   { gesture: "trim handle commit", action: "trimClips", requestType: "trimClips", backend: "TrimClips" },
   { gesture: "inspector property commit", action: "setClipProperties", requestType: "setClipProperties", backend: "SetClipProperties" },
+  { gesture: "protect manual text or position", action: "setProtectedFields", requestType: "setProtectedFields", backend: "SetProtectedFields" },
+  { gesture: "place user-ordered rough cut", action: "placeUserRoughCut", requestType: "placeUserRoughCut", backend: "PlaceUserRoughCut" },
   { gesture: "canvas transform commit", action: "setTransformAtFrame", requestType: "setTransformAtFrame", backend: "SetTransformAtFrame" },
   { gesture: "replace keyframe lane", action: "setKeyframes", requestType: "setKeyframes", backend: "SetKeyframes" },
   { gesture: "stamp keyframe", action: "stampKeyframe", requestType: "stampKeyframe", backend: "StampKeyframe" },
@@ -409,6 +413,25 @@ export async function setClipProperties(
   await applyAndRefresh({ type: "setClipProperties", clipIds, properties }, context);
 }
 
+export async function setProtectedFields(clipId: string, fields: ProtectedField[]) {
+  await applyAndRefresh({ type: "setProtectedFields", clipId, fields });
+}
+
+export async function placeUserRoughCut(
+  items: UserRoughCutItemReq[],
+  title: string,
+  titleDurationFrames: number,
+) {
+  if (items.length === 0) return;
+  const trimmed = title.trim();
+  return applyAndRefresh({
+    type: "placeUserRoughCut",
+    items,
+    title: trimmed.length > 0 ? trimmed : undefined,
+    titleDurationFrames,
+  });
+}
+
 /** Commit one on-canvas transform gesture at an absolute timeline frame.
  *  The backend chooses keyframed versus static storage per transform component
  *  and applies the whole gesture atomically. */
@@ -706,7 +729,7 @@ export async function applyAutomationCommands(commands: EditRequest[]) {
 
 export async function applySmartReframe(clipIds: string[], crop: Crop, transform?: Transform) {
   if (clipIds.length === 0) return;
-  await setClipProperties(clipIds, { crop, transform });
+  await setClipProperties(clipIds, { crop, transform, respectProtectedFields: true });
 }
 
 export async function addClipsToBeatFrames(entries: ClipEntryReq[], beatFrames: number[]) {

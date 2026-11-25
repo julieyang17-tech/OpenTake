@@ -90,8 +90,13 @@ pub fn available_audio_track_index(
 ) -> Option<usize> {
     let end_frame = start_frame.checked_add(duration)?;
     let z = zones(timeline);
-    for i in z.first_audio_index..z.track_count {
-        let track = &timeline.tracks[i];
+    for (i, track) in timeline
+        .tracks
+        .iter()
+        .enumerate()
+        .take(z.track_count)
+        .skip(z.first_audio_index)
+    {
         let conflicts = track.clips.iter().any(|clip| {
             clip.start_frame
                 .checked_add(clip.duration_frames)

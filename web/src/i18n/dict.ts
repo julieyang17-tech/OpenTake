@@ -1214,6 +1214,26 @@ const zh: Dict = {
   "library.loading": "加载中…",
   "library.empty": "还没有收藏的素材。在媒体面板里星标素材即可加入全局库。",
   "library.noMatch": "没有匹配的素材。",
+
+  "workbench.title": "个人初剪",
+  "workbench.rule": "按你勾选的顺序首尾相接，放到新轨道上。这里不分析画面，不自动分类，也不挑选效果。",
+  "workbench.empty": "先用上方的导入加入素材。列表只显示名称。",
+  "workbench.include": "把{name}放进初剪",
+  "workbench.moveUp": "把{name}上移",
+  "workbench.moveDown": "把{name}下移",
+  "workbench.titleText": "标题文字，可留空",
+  "workbench.titlePlaceholder": "例如：周末记录",
+  "workbench.place": "按这个顺序放到时间线",
+  "workbench.needSelection": "先勾选要使用的素材。",
+  "workbench.placed": "已按你的顺序放到时间线。选中标题后，在右侧改字号、样式和位置。",
+  "workbench.saveExport": "保存和导出仍用窗口顶部现有按钮。导出在本机桌面应用里完成。",
+  "workbench.positionX": "水平位置",
+  "workbench.positionY": "垂直位置",
+  "workbench.lockTitle": "保护手调",
+  "workbench.lockHelp": "勾选后，自动修改会跳过这些项。你自己仍然可以改，保存后保护还在。",
+  "workbench.lockSize": "锁定字号",
+  "workbench.lockStyle": "锁定字体、颜色、对齐和装饰",
+  "workbench.lockPosition": "锁定位置",
 };
 
 const en: Dict = {
@@ -2400,6 +2420,26 @@ const en: Dict = {
   "library.loading": "Loading…",
   "library.empty": "No favorited assets yet. Star assets in the media panel to add them here.",
   "library.noMatch": "No matching assets.",
+
+  "workbench.title": "Personal rough cut",
+  "workbench.rule": "Checked items are placed back to back, in your order, on a new track. This does not analyze pictures, classify them, or pick an effect.",
+  "workbench.empty": "Import media above first. The list shows names only.",
+  "workbench.include": "Include {name}",
+  "workbench.moveUp": "Move {name} up",
+  "workbench.moveDown": "Move {name} down",
+  "workbench.titleText": "Title text, optional",
+  "workbench.titlePlaceholder": "For example: Weekend notes",
+  "workbench.place": "Place this order on the timeline",
+  "workbench.needSelection": "Check the media you want to use.",
+  "workbench.placed": "Placed in your order. Select the title, then change size, style, and position on the right.",
+  "workbench.saveExport": "Save and export stay on the existing top-bar buttons. Export runs in the desktop app.",
+  "workbench.positionX": "Horizontal position",
+  "workbench.positionY": "Vertical position",
+  "workbench.lockTitle": "Protect manual edits",
+  "workbench.lockHelp": "Checked fields are skipped by automatic edits. You can still change them, and the protection remains after save.",
+  "workbench.lockSize": "Lock font size",
+  "workbench.lockStyle": "Lock font, color, alignment, and decoration",
+  "workbench.lockPosition": "Lock position",
 };
 
 export const DICTS: Record<Locale, Dict> = {

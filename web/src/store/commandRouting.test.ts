@@ -80,6 +80,8 @@ import {
   rippleDeleteRanges,
   setChromaKey,
   setClipProperties,
+  setProtectedFields,
+  placeUserRoughCut,
   setColorGrade,
   setLut,
   setLoudnessNormalization,
@@ -287,6 +289,24 @@ describe("edit gesture command routing", () => {
     await route(
       { type: "setClipProperties", clipIds: ["clip-a"], properties: { opacity: 0.5 } },
       () => setClipProperties(["clip-a"], { opacity: 0.5 }),
+    );
+    await route(
+      { type: "setProtectedFields", clipId: "clip-a", fields: ["textFontSize"] },
+      () => setProtectedFields("clip-a", ["textFontSize"]),
+    );
+    await route(
+      {
+        type: "placeUserRoughCut",
+        items: [{ mediaRef: "media-a", mediaType: "video", durationFrames: 30, hasAudio: false }],
+        title: "标题",
+        titleDurationFrames: 30,
+      },
+      () =>
+        placeUserRoughCut(
+          [{ mediaRef: "media-a", mediaType: "video", durationFrames: 30, hasAudio: false }],
+          "标题",
+          30,
+        ),
     );
     await route(
       { type: "setTransformAtFrame", clipId: "clip-a", frame: 15, transform },
