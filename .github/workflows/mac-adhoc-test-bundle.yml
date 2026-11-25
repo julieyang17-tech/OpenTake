@@ -1,0 +1,111 @@
+name: macOS ad-hoc test bundle
+
+# Manual test bundle for the public fork. It does not run on push or pull_request.
+# It does not create a tag, GitHub Release, notarization ticket, or updater archive.
+# It asks for no Apple signing certificate and no Tauri signing secret.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mac-adhoc-test-bundle-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  bundle:
+    name: Ad-hoc app and DMG
+    if: github.repository == 'julieyang17-tech/OpenTake'
+    runs-on: macos-14
+    timeout-minutes: 120
+    env:
+      CI: true
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        run: rustup component add rustfmt clippy
+
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - name: Provision checksum-pinned ARM64 FFmpeg sidecars
+        run: python3 scripts/provision_ffmpeg_sidecars.py --target aarch64-apple-darwin
+
+      - name: Install locked Web dependencies
+        run: pnpm -C web install --frozen-lockfile
+
+      - name: Build ad-hoc app and DMG without updater artifacts
+        run: >-
+          ./web/node_modules/.bin/tauri build --ci
+          --target aarch64-apple-darwin --bundles app,dmg
+          --config '{"bundle":{"createUpdaterArtifacts":false,"macOS":{"signingIdentity":"-"}}}'
+
+      - name: Verify ad-hoc app and DMG
+        shell: bash
+        run: |
+          set -euo pipefail
+          bundle_root="target/aarch64-apple-darwin/release/bundle"
+          test "$(find "$bundle_root/macos" -maxdepth 1 -type d -name '*.app' | wc -l | tr -d ' ')" -eq 1
+          test "$(find "$bundle_root/dmg" -maxdepth 1 -type f -name '*.dmg' | wc -l | tr -d ' ')" -eq 1
+          test "$(find "$bundle_root" -name '*.app.tar.gz' | wc -l | tr -d ' ')" -eq 0
+          test "$(find "$bundle_root" -name '*.sig' | wc -l | tr -d ' ')" -eq 0
+          app="$(find "$bundle_root/macos" -maxdepth 1 -type d -name '*.app' -print -quit)"
+          dmg="$(find "$bundle_root/dmg" -maxdepth 1 -type f -name '*.dmg' -print -quit)"
+          test -f "$app/Contents/MacOS/ffmpeg"
+          test -f "$app/Contents/MacOS/ffprobe"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          codesign -dv --verbose=4 "$app" 2>&1 | grep -F 'Signature=adhoc'
+          hdiutil verify "$dmg"
+          python3 - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          bundle = Path("target/aarch64-apple-darwin/release/bundle")
+          dmgs = list((bundle / "dmg").glob("*.dmg"))
+          apps = list((bundle / "macos").glob("*.app"))
+          if len(dmgs) != 1 or len(apps) != 1:
+              raise SystemExit("expected one app and one dmg")
+          def sha256(path: Path) -> str:
+              digest = hashlib.sha256()
+              with path.open("rb") as stream:
+                  for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                      digest.update(chunk)
+              return digest.hexdigest()
+          receipt = {
+              "schema": "opentake-macos-adhoc-test-receipt-v1",
+              "repository": os.environ["GITHUB_REPOSITORY"],
+              "sha": os.environ["GITHUB_SHA"],
+              "release_published": False,
+              "notarized": False,
+              "developer_id_signed": False,
+              "platform_signing_mode": "ad-hoc",
+              "hevc_import_export_verified": False,
+              "artifacts": [
+                  {"name": dmgs[0].name, "sha256": sha256(dmgs[0]), "bytes": dmgs[0].stat().st_size},
+                  {"name": apps[0].name, "bytes": sum(p.stat().st_size for p in apps[0].rglob("*") if p.is_file())},
+              ],
+          }
+          Path("macos-adhoc-test-receipt.json").write_text(
+              json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+          )
+          PY
+
+      - name: Upload private-test app and DMG
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: opentake-macos-adhoc-test-${{ github.sha }}
+          path: |
+            target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
+            macos-adhoc-test-receipt.json
+          if-no-files-found: error
+          retention-days: 14

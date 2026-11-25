@@ -44,3 +44,11 @@
 - 云端 Linux 没有 Metal。现有合成器只启用 `wgsl` 和 `metal`。本轮在这台机器上运行 `cargo test -p opentake-render --test gpu_smoke`，五条合成测试都打印 `no suitable GPU adapter available` 后跳过。因此没有可解码的应用导出成片，不能把 GPU 导出说成已通过。
 
 要在 Mac 上验收，需要一台可运行的 macOS 构建环境或用户明确同意后的本机操作。本轮不在用户的 Mac 上安装或写入。
+
+## Mac 打包路线（2026-11-25 复核）
+
+现有 `.github/workflows/release.yml` 能在 `macos-14` 上打出 ARM64 `.app` 和 `.dmg`，但只服务 `appergb/OpenTake` 的 tag 发布，并且要求 `TAURI_SIGNING_PRIVATE_KEY`。本 fork 不走这条发布流程，也不取签名密钥。
+
+新增 `.github/workflows/mac-adhoc-test-bundle.yml` 只接受手动 `workflow_dispatch`。它在公开仓库的标准 `macos-14` 上做 ad-hoc 签名的 app 和 DMG，关闭 updater 产物，上传 Actions artifact，不创建 Release。本环境是 `x86_64-unknown-linux-gnu`，没有 macOS SDK，不能交叉产出 `.app`。这个 workflow 文件已准备好，但没有被触发。
+
+本机 ffmpeg 可以编码并解码一份标注为 `OPENTAKE_SYNTHETIC_4K_HEVC_NOT_USER_MEDIA` 的 8 帧 3840×2160 HEVC。那只是合成探针，不是应用导入、预览或 GPU 导出。
