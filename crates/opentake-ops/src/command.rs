@@ -7061,20 +7061,20 @@ fn track_display_label(timeline: &Timeline, track_index: usize) -> String {
         ClipType::Lottie => "L",
     };
     let first_audio = ops::zones(timeline).first_audio_index;
-    let mut n = 0;
-    if kind == ClipType::Audio {
-        for i in 0..=track_index {
-            if timeline.tracks[i].kind == kind {
-                n += 1;
-            }
-        }
+    let n = if kind == ClipType::Audio {
+        timeline.tracks[..=track_index]
+            .iter()
+            .filter(|track| track.kind == kind)
+            .count()
     } else {
+        let mut n = 0;
         for i in track_index..track_index.max(first_audio).max(track_index + 1) {
             if i < timeline.tracks.len() && timeline.tracks[i].kind == kind {
                 n += 1;
             }
         }
-    }
+        n
+    };
     format!("{prefix}{n}")
 }
 

@@ -155,7 +155,7 @@ pub fn place_clip(
 fn spec_arithmetic_is_safe(spec: &PlaceSpec) -> bool {
     let trim_start = spec.trim_start_frame.unwrap_or(0);
     let trim_end = spec.trim_end_frame.unwrap_or(0);
-    if spec.start_frame < 0
+    !(spec.start_frame < 0
         || spec.duration_frames < 1
         || (!matches!(spec.media_type, ClipType::Image | ClipType::Text)
             && (trim_start < 0 || trim_end < 0))
@@ -166,11 +166,7 @@ fn spec_arithmetic_is_safe(spec: &PlaceSpec) -> bool {
             .and_then(|value| value.checked_add(trim_end))
             .is_none()
         || trim_start.checked_add(spec.duration_frames).is_none()
-        || trim_end.checked_add(spec.duration_frames).is_none()
-    {
-        return false;
-    }
-    true
+        || trim_end.checked_add(spec.duration_frames).is_none())
 }
 
 fn clip_arithmetic_is_safe(clip: &Clip) -> bool {

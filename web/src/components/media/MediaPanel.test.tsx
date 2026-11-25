@@ -1598,7 +1598,7 @@ describe("media presentation controls (view mode / sort / filter)", () => {
       container.querySelector<HTMLButtonElement>('button[title="视图模式"]')!;
     expect(viewButton().disabled).toBe(false);
 
-    const input = container.querySelector<HTMLInputElement>("input")!;
+    const input = container.querySelector<HTMLInputElement>('input[type="search"]')!;
     const typeQuery = (value: string) => {
       const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
       setter?.call(input, value);
