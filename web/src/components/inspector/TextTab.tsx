@@ -13,7 +13,7 @@ import { Icon } from "../ui/Icon";
 import { ScrubbableNumberField } from "./ScrubbableNumberField";
 import { RADIUS, SPACE } from "../../lib/theme";
 import type { TFunction } from "../../i18n";
-import type { Clip, Rgba, TextAlignment, TextStyle } from "../../lib/types";
+import type { Clip, ProtectedField, Rgba, TextAlignment, TextStyle, TextStylePatch } from "../../lib/types";
 
 const COLOR_SWATCH_SIZE = SPACE.lgXl;
 
@@ -79,10 +79,52 @@ export function TextTab({ clip, t }: { clip: Clip; t: TFunction }) {
     void edit.setClipProperties([clip.id], { textContent: value });
   };
 
-  // Commit a whole new style (style edits are immediate, like the grade panel).
-  const commitStyle = (next: TextStyle) => {
+  // Patch only the changed style fields so an unrelated manual choice stays.
+  const commitStyle = (next: TextStyle, patch: TextStylePatch) => {
     setStyle(next);
-    void edit.setClipProperties([clip.id], { textStyle: next });
+    void edit.setClipProperties([clip.id], { textStylePatch: patch });
+  };
+
+  const commitPosition = (axis: "centerX" | "centerY", nextValue: number) => {
+    void edit.setClipProperties([clip.id], {
+      transform: { ...clip.transform, [axis]: nextValue },
+    });
+  };
+
+  const managed = new Set<ProtectedField>([
+    "textFontName",
+    "textFontSize",
+    "textFontScale",
+    "textColor",
+    "textAlignment",
+    "textShadow",
+    "textBackground",
+    "textBorder",
+    "transformPosition",
+  ]);
+  const locked = new Set(clip.protectedFields ?? []);
+  const sizeLocked = locked.has("textFontSize");
+  const styleLocked = (
+    ["textFontName", "textFontScale", "textColor", "textAlignment", "textShadow", "textBackground", "textBorder"] as const
+  ).every((field) => locked.has(field));
+  const positionLocked = locked.has("transformPosition");
+  const writeLocks = (next: { size: boolean; style: boolean; position: boolean }) => {
+    const kept = (clip.protectedFields ?? []).filter((field) => !managed.has(field));
+    const fields: ProtectedField[] = [...kept];
+    if (next.size) fields.push("textFontSize");
+    if (next.style) {
+      fields.push(
+        "textFontName",
+        "textFontScale",
+        "textColor",
+        "textAlignment",
+        "textShadow",
+        "textBackground",
+        "textBorder",
+      );
+    }
+    if (next.position) fields.push("transformPosition");
+    void edit.setProtectedFields(clip.id, fields);
   };
 
   return (
@@ -119,7 +161,7 @@ export function TextTab({ clip, t }: { clip: Clip; t: TFunction }) {
           <select
             aria-label={t("inspector.field.fontFamily")}
             value={style.fontName}
-            onChange={(e) => commitStyle({ ...style, fontName: e.target.value })}
+            onChange={(e) => commitStyle({ ...style, fontName: e.target.value }, { fontName: e.target.value })}
             style={{
               maxWidth: 120,
               fontSize: "var(--fs-sm)",
@@ -150,7 +192,7 @@ export function TextTab({ clip, t }: { clip: Clip; t: TFunction }) {
             sensitivity={0.5}
             format={(v) => v.toFixed(0)}
             width={56}
-            onCommit={(v) => commitStyle({ ...style, fontSize: v })}
+            onCommit={(v) => commitStyle({ ...style, fontSize: v }, { fontSize: v })}
           />
         </Row>
 
@@ -158,7 +200,7 @@ export function TextTab({ clip, t }: { clip: Clip; t: TFunction }) {
           <ColorSwatch
             label={t("inspector.field.textColor")}
             color={style.color}
-            onCommit={(color) => commitStyle({ ...style, color })}
+            onCommit={(color) => commitStyle({ ...style, color }, { color })}
           />
         </Row>
 
@@ -170,7 +212,7 @@ export function TextTab({ clip, t }: { clip: Clip; t: TFunction }) {
                 align={a}
                 active={style.alignment === a}
                 title={t(`inspector.align.${a}`)}
-                onClick={() => commitStyle({ ...style, alignment: a })}
+                onClick={() => commitStyle({ ...style, alignment: a }, { alignment: a })}
               />
             ))}
           </div>
@@ -181,10 +223,16 @@ export function TextTab({ clip, t }: { clip: Clip; t: TFunction }) {
           enabled={style.background.enabled}
           color={style.background.color}
           onToggle={(enabled) =>
-            commitStyle({ ...style, background: { ...style.background, enabled } })
+            commitStyle(
+              { ...style, background: { ...style.background, enabled } },
+              { background: { ...style.background, enabled } },
+            )
           }
           onColor={(color) =>
-            commitStyle({ ...style, background: { ...style.background, color } })
+            commitStyle(
+              { ...style, background: { ...style.background, color } },
+              { background: { ...style.background, color } },
+            )
           }
         />
 
@@ -193,9 +241,17 @@ export function TextTab({ clip, t }: { clip: Clip; t: TFunction }) {
           enabled={style.border.enabled}
           color={style.border.color}
           onToggle={(enabled) =>
-            commitStyle({ ...style, border: { ...style.border, enabled } })
+            commitStyle(
+              { ...style, border: { ...style.border, enabled } },
+              { border: { ...style.border, enabled } },
+            )
           }
-          onColor={(color) => commitStyle({ ...style, border: { ...style.border, color } })}
+          onColor={(color) =>
+            commitStyle(
+              { ...style, border: { ...style.border, color } },
+              { border: { ...style.border, color } },
+            )
+          }
         />
 
         <ToggleColorRow
@@ -203,12 +259,88 @@ export function TextTab({ clip, t }: { clip: Clip; t: TFunction }) {
           enabled={style.shadow.enabled}
           color={style.shadow.color}
           onToggle={(enabled) =>
-            commitStyle({ ...style, shadow: { ...style.shadow, enabled } })
+            commitStyle(
+              { ...style, shadow: { ...style.shadow, enabled } },
+              { shadow: { ...style.shadow, enabled } },
+            )
           }
-          onColor={(color) => commitStyle({ ...style, shadow: { ...style.shadow, color } })}
+          onColor={(color) =>
+            commitStyle(
+              { ...style, shadow: { ...style.shadow, color } },
+              { shadow: { ...style.shadow, color } },
+            )
+          }
+        />
+
+        <Row label={t("workbench.positionX")}>
+          <ScrubbableNumberField
+            ariaLabel={t("workbench.positionX")}
+            value={clip.transform.centerX}
+            min={0}
+            max={1}
+            sensitivity={0.005}
+            format={(v) => v.toFixed(2)}
+            width={56}
+            onCommit={(v) => commitPosition("centerX", v)}
+          />
+        </Row>
+        <Row label={t("workbench.positionY")}>
+          <ScrubbableNumberField
+            ariaLabel={t("workbench.positionY")}
+            value={clip.transform.centerY}
+            min={0}
+            max={1}
+            sensitivity={0.005}
+            format={(v) => v.toFixed(2)}
+            width={56}
+            onCommit={(v) => commitPosition("centerY", v)}
+          />
+        </Row>
+      </div>
+
+      <div>
+        <SectionLabel label={t("workbench.lockTitle")} />
+        <p style={{ margin: "0 0 8px", fontSize: "var(--fs-xs)", color: "var(--text-tertiary)", lineHeight: 1.4 }}>
+          {t("workbench.lockHelp")}
+        </p>
+        <LockRow
+          label={t("workbench.lockSize")}
+          checked={sizeLocked}
+          onChange={(checked) => writeLocks({ size: checked, style: styleLocked, position: positionLocked })}
+        />
+        <LockRow
+          label={t("workbench.lockStyle")}
+          checked={styleLocked}
+          onChange={(checked) => writeLocks({ size: sizeLocked, style: checked, position: positionLocked })}
+        />
+        <LockRow
+          label={t("workbench.lockPosition")}
+          checked={positionLocked}
+          onChange={(checked) => writeLocks({ size: sizeLocked, style: styleLocked, position: checked })}
         />
       </div>
     </section>
+  );
+}
+
+function LockRow({
+  label,
+  checked,
+  onChange,
+}: {
+  label: string;
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+}) {
+  return (
+    <label style={{ display: "flex", alignItems: "center", gap: 8, minHeight: 28, fontSize: "var(--fs-xs)" }}>
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(event) => onChange(event.target.checked)}
+      />
+      {label}
+    </label>
   );
 }
 

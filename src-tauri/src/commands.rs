@@ -26,13 +26,13 @@ use opentake_ops::command::{
 };
 use opentake_ops::{
     CaptionEntry, ClipEntry, ClipMove, ClipProperties, FrameRange, KeyframePayload,
-    KeyframeProperty, KeyframeValue, RenameEntry, TextAutoTrackEntry, TextEntry,
+    KeyframeProperty, KeyframeValue, RenameEntry, TextAutoTrackEntry, TextEntry, UserRoughCutItem,
 };
 
 use opentake_domain::{
     AnimPair, AudioDenoise, ChromaKey, Clip, ClipType, ColorGrade, Crop, Effect, Interpolation,
-    Keyframe, KeyframeTrack, LoudnessNormalization, LutReference, Mask, StabilizationTrack,
-    TextStyle, Transform, TransitionKind,
+    Keyframe, KeyframeTrack, LoudnessNormalization, LutReference, Mask, ProtectedField,
+    StabilizationTrack, TextStyle, TextStylePatch, Transform, TransitionKind,
 };
 
 const MAX_CONCURRENT_PROJECT_PREPARES: usize = 4;
@@ -1425,6 +1425,17 @@ pub enum EditRequest {
         properties: Box<ClipPropertiesDto>,
     },
     #[serde(rename_all = "camelCase")]
+    SetProtectedFields {
+        clip_id: String,
+        fields: Vec<ProtectedField>,
+    },
+    #[serde(rename_all = "camelCase")]
+    PlaceUserRoughCut {
+        items: Vec<UserRoughCutItemDto>,
+        title: Option<String>,
+        title_duration_frames: i32,
+    },
+    #[serde(rename_all = "camelCase")]
     SetTransformAtFrame {
         clip_id: String,
         frame: i32,
@@ -1674,6 +1685,21 @@ impl EditRequest {
             } => EditCommand::SetClipProperties {
                 clip_ids,
                 properties: Box::new((*properties).into_properties()),
+            },
+            EditRequest::SetProtectedFields { clip_id, fields } => {
+                EditCommand::SetProtectedFields { clip_id, fields }
+            }
+            EditRequest::PlaceUserRoughCut {
+                items,
+                title,
+                title_duration_frames,
+            } => EditCommand::PlaceUserRoughCut {
+                items: items
+                    .into_iter()
+                    .map(UserRoughCutItemDto::into_item)
+                    .collect(),
+                title,
+                title_duration_frames,
             },
             EditRequest::SetTransformAtFrame {
                 clip_id,
@@ -2081,6 +2107,62 @@ impl FrameRangeDto {
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct TextStylePatchDto {
+    #[serde(default)]
+    pub font_name: Option<String>,
+    #[serde(default)]
+    pub font_size: Option<f64>,
+    #[serde(default)]
+    pub font_scale: Option<f64>,
+    #[serde(default)]
+    pub color: Option<opentake_domain::Rgba>,
+    #[serde(default)]
+    pub alignment: Option<opentake_domain::TextAlignment>,
+    #[serde(default)]
+    pub shadow: Option<opentake_domain::Shadow>,
+    #[serde(default)]
+    pub background: Option<opentake_domain::Fill>,
+    #[serde(default)]
+    pub border: Option<opentake_domain::Fill>,
+}
+
+impl TextStylePatchDto {
+    fn into_patch(self) -> TextStylePatch {
+        TextStylePatch {
+            font_name: self.font_name,
+            font_size: self.font_size,
+            font_scale: self.font_scale,
+            color: self.color,
+            alignment: self.alignment,
+            shadow: self.shadow,
+            background: self.background,
+            border: self.border,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserRoughCutItemDto {
+    pub media_ref: String,
+    pub media_type: ClipType,
+    pub duration_frames: i32,
+    pub has_audio: bool,
+}
+
+impl UserRoughCutItemDto {
+    fn into_item(self) -> UserRoughCutItem {
+        UserRoughCutItem {
+            media_ref: self.media_ref,
+            media_type: self.media_type,
+            duration_frames: self.duration_frames,
+            has_audio: self.has_audio,
+        }
+    }
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ClipPropertiesDto {
     #[serde(default)]
     pub duration_frames: Option<i32>,
@@ -2102,6 +2184,10 @@ pub struct ClipPropertiesDto {
     pub text_content: Option<String>,
     #[serde(default)]
     pub text_style: Option<TextStyle>,
+    #[serde(default)]
+    pub text_style_patch: Option<TextStylePatchDto>,
+    #[serde(default)]
+    pub respect_protected_fields: bool,
     #[serde(default)]
     pub crop: Option<Crop>,
     #[serde(default)]
@@ -2131,6 +2217,8 @@ impl ClipPropertiesDto {
             reversed: self.reversed,
             text_content: self.text_content,
             text_style: self.text_style,
+            text_style_patch: self.text_style_patch.map(TextStylePatchDto::into_patch),
+            respect_protected_fields: self.respect_protected_fields,
             crop: self.crop,
             fade_in_frames: self.fade_in_frames,
             fade_out_frames: self.fade_out_frames,
@@ -3462,7 +3550,7 @@ mod project_prewarm_lifecycle_tests {
 mod edit_request_serde_tests {
     use super::{begin_edit_activity, validate_freeze_frame_request, EditRequest};
     use opentake_core::{AppCore, EditCommand};
-    use opentake_domain::{ClipType, TransitionKind};
+    use opentake_domain::{ClipType, ProtectedField, TransitionKind};
     use opentake_ops::command::{NewTrackClipMode, PlaceMediaTarget};
     use opentake_ops::ClipEntry;
 
@@ -3498,6 +3586,8 @@ mod edit_request_serde_tests {
             EditRequest::FreezeFrame { .. } => "FreezeFrame",
             EditRequest::TrimClips { .. } => "TrimClips",
             EditRequest::SetClipProperties { .. } => "SetClipProperties",
+            EditRequest::SetProtectedFields { .. } => "SetProtectedFields",
+            EditRequest::PlaceUserRoughCut { .. } => "PlaceUserRoughCut",
             EditRequest::SetTransformAtFrame { .. } => "SetTransformAtFrame",
             EditRequest::SetKeyframes { .. } => "SetKeyframes",
             EditRequest::StampKeyframe { .. } => "StampKeyframe",
@@ -3570,6 +3660,8 @@ mod edit_request_serde_tests {
                 | ("SplitClips", EditCommand::SplitClips { .. })
                 | ("TrimClips", EditCommand::TrimClips { .. })
                 | ("SetClipProperties", EditCommand::SetClipProperties { .. })
+                | ("SetProtectedFields", EditCommand::SetProtectedFields { .. })
+                | ("PlaceUserRoughCut", EditCommand::PlaceUserRoughCut { .. })
                 | (
                     "SetTransformAtFrame",
                     EditCommand::SetTransformAtFrame { .. }
@@ -3681,6 +3773,14 @@ mod edit_request_serde_tests {
             (
                 r#"{"type":"setClipProperties","clipIds":[],"properties":{}}"#,
                 "SetClipProperties",
+            ),
+            (
+                r#"{"type":"setProtectedFields","clipId":"c","fields":[]}"#,
+                "SetProtectedFields",
+            ),
+            (
+                r#"{"type":"placeUserRoughCut","items":[{"mediaRef":"m","mediaType":"video","durationFrames":1,"hasAudio":false}],"titleDurationFrames":1}"#,
+                "PlaceUserRoughCut",
             ),
             (
                 r#"{"type":"setTransformAtFrame","clipId":"c","frame":1,"transform":{"centerX":0.5,"centerY":0.5,"width":1.0,"height":1.0,"rotation":0.0,"flipHorizontal":false,"flipVertical":false}}"#,
@@ -3804,7 +3904,7 @@ mod edit_request_serde_tests {
             ),
         ];
 
-        assert_eq!(cases.len(), 56);
+        assert_eq!(cases.len(), 58);
         for (json, expected_route) in cases {
             let mut hostile = serde_json::from_str::<serde_json::Value>(json).unwrap();
             hostile
@@ -4099,6 +4199,57 @@ mod edit_request_serde_tests {
                 assert_eq!(properties.reversed, Some(true));
             }
             other => panic!("expected SetClipProperties, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn deserializes_field_protection_and_rough_cut() {
+        let request: EditRequest = serde_json::from_str(
+            r#"{"type":"setProtectedFields","clipId":"c1","fields":["textFontSize","transformPosition"]}"#,
+        )
+        .expect("setProtectedFields");
+        match request.into_command().expect("command") {
+            EditCommand::SetProtectedFields { clip_id, fields } => {
+                assert_eq!(clip_id, "c1");
+                assert_eq!(
+                    fields,
+                    vec![
+                        ProtectedField::TextFontSize,
+                        ProtectedField::TransformPosition
+                    ]
+                );
+            }
+            other => panic!("expected SetProtectedFields, got {other:?}"),
+        }
+
+        let request: EditRequest = serde_json::from_str(
+            r#"{"type":"setClipProperties","clipIds":["c1"],"properties":{"textStylePatch":{"fontSize":36},"respectProtectedFields":true}}"#,
+        )
+        .expect("partial style");
+        match request.into_command().expect("command") {
+            EditCommand::SetClipProperties { properties, .. } => {
+                assert!(properties.respect_protected_fields);
+                assert_eq!(properties.text_style_patch.unwrap().font_size, Some(36.0));
+            }
+            other => panic!("expected SetClipProperties, got {other:?}"),
+        }
+
+        let request: EditRequest = serde_json::from_str(
+            r#"{"type":"placeUserRoughCut","items":[{"mediaRef":"synth","mediaType":"video","durationFrames":12,"hasAudio":false}],"title":"标题","titleDurationFrames":30}"#,
+        )
+        .expect("placeUserRoughCut");
+        match request.into_command().expect("command") {
+            EditCommand::PlaceUserRoughCut {
+                items,
+                title,
+                title_duration_frames,
+            } => {
+                assert_eq!(items.len(), 1);
+                assert_eq!(items[0].media_ref, "synth");
+                assert_eq!(title.as_deref(), Some("标题"));
+                assert_eq!(title_duration_frames, 30);
+            }
+            other => panic!("expected PlaceUserRoughCut, got {other:?}"),
         }
     }
 

@@ -5,6 +5,12 @@
  * the Rust core under Tauri. Kept deliberately small.
  */
 
+import {
+  isProtected,
+  mergeAutomaticTextStyle,
+  mergeProtectedTransform,
+  mergeTextStylePatch,
+} from "./fieldProtection";
 import type {
   AnimPair,
   Clip,
@@ -1737,13 +1743,35 @@ export function createFallbackStore(initialTimeline?: Timeline) {
             if (p.opacity !== undefined) next.opacity = p.opacity;
             if (p.volume !== undefined) next.volume = p.volume;
             if (p.reversed !== undefined) next.reversed = p.reversed;
-            if (p.transform !== undefined) next.transform = structuredClone(p.transform);
+            const respect = p.respectProtectedFields === true;
+            if (p.transform !== undefined) {
+              next.transform = respect
+                ? mergeProtectedTransform(next.transform, p.transform, next.protectedFields)
+                : structuredClone(p.transform);
+            }
             if (p.crop !== undefined) {
               next.crop = structuredClone(p.crop);
               next.cropTrack = undefined;
             }
-            if (p.textContent !== undefined) next.textContent = p.textContent;
-            if (p.textStyle !== undefined) next.textStyle = structuredClone(p.textStyle);
+            if (p.textContent !== undefined && !isProtected(next, "textContent", respect)) {
+              next.textContent = p.textContent;
+            }
+            if (p.textStyle !== undefined) {
+              next.textStyle = respect
+                ? mergeAutomaticTextStyle(next.textStyle, p.textStyle, next.protectedFields)
+                : structuredClone(p.textStyle);
+            }
+            if (p.textStylePatch !== undefined) {
+              const patchWrites = Object.values(p.textStylePatch).some((value) => value !== undefined);
+              if (patchWrites) {
+                next.textStyle = mergeTextStylePatch(
+                  next.textStyle,
+                  p.textStylePatch,
+                  next.protectedFields,
+                  respect,
+                );
+              }
+            }
             if (p.flipHorizontal !== undefined) next.transform.flipHorizontal = p.flipHorizontal;
             if (p.flipVertical !== undefined) next.transform.flipVertical = p.flipVertical;
             next.fadeInFrames = Math.min(
@@ -1771,6 +1799,100 @@ export function createFallbackStore(initialTimeline?: Timeline) {
             timeline.tracks[location[0]].clips[location[1]] = clip;
           }
           return result(changed, "Set Clip Property", cmd.clipIds);
+        }
+        case "setProtectedFields": {
+          const location = findClip(cmd.clipId);
+          if (!location) return result(false, "Set Protected Fields", []);
+          const next = structuredClone(timeline.tracks[location[0]].clips[location[1]]);
+          const fields: typeof cmd.fields = [];
+          for (const field of cmd.fields) {
+            if (!fields.includes(field)) fields.push(field);
+          }
+          next.protectedFields = fields;
+          timeline.tracks[location[0]].clips[location[1]] = next;
+          return result(true, "Set Protected Fields", [cmd.clipId]);
+        }
+        case "placeUserRoughCut": {
+          if (cmd.items.length === 0) return result(false, "Place User Rough Cut", []);
+          const title = cmd.title?.trim();
+          if (title && cmd.titleDurationFrames < 1) return result(false, "Place User Rough Cut", []);
+          let cursor = 0;
+          const placed: Clip[] = [];
+          const linkedAudio: Clip[] = [];
+          for (const item of cmd.items) {
+            if (!item.mediaRef.trim() || item.durationFrames < 1 || item.mediaType === "text") {
+              return result(false, "Place User Rough Cut", []);
+            }
+            const clip = newClip(
+              nextId(),
+              item.mediaRef,
+              item.mediaType,
+              cursor,
+              item.durationFrames,
+            );
+            placed.push(clip);
+            if (item.mediaType === "video" && item.hasAudio) {
+              linkedAudio.push(
+                newClip(nextId(), item.mediaRef, "audio", cursor, item.durationFrames),
+              );
+            }
+            cursor += item.durationFrames;
+          }
+          const visual = placed.filter((clip) => clip.mediaType !== "audio");
+          const audio = [...placed.filter((clip) => clip.mediaType === "audio"), ...linkedAudio];
+          const affected: string[] = [];
+          if (visual.length > 0) {
+            timeline.tracks.unshift({
+              id: nextTrackId(),
+              type: "video",
+              muted: false,
+              hidden: false,
+              syncLocked: true,
+              clips: visual,
+            });
+            affected.push(...visual.map((clip) => clip.id));
+          }
+          if (audio.length > 0) {
+            timeline.tracks.push({
+              id: nextTrackId(),
+              type: "audio",
+              muted: false,
+              hidden: false,
+              syncLocked: true,
+              clips: audio,
+            });
+            affected.push(...audio.map((clip) => clip.id));
+          }
+          if (title) {
+            const text = newClip(nextId(), "", "text", 0, cmd.titleDurationFrames);
+            text.textContent = title;
+            text.textStyle = {
+              fontName: "Helvetica-Bold",
+              fontSize: 72,
+              fontScale: 1,
+              color: { r: 1, g: 1, b: 1, a: 1 },
+              alignment: "center",
+              shadow: {
+                enabled: true,
+                color: { r: 0, g: 0, b: 0, a: 0.6 },
+                offsetX: 0,
+                offsetY: -2,
+                blur: 6,
+              },
+              background: { enabled: false, color: { r: 0, g: 0, b: 0, a: 0.6 } },
+              border: { enabled: false, color: { r: 0, g: 0, b: 0, a: 1 } },
+            };
+            timeline.tracks.unshift({
+              id: nextTrackId(),
+              type: "video",
+              muted: false,
+              hidden: false,
+              syncLocked: true,
+              clips: [text],
+            });
+            affected.push(text.id);
+          }
+          return result(true, "Place User Rough Cut", affected);
         }
         case "setTransformAtFrame": {
           const transform: Transform = cmd.transform;

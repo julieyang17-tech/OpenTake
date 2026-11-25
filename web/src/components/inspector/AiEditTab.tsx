@@ -75,7 +75,8 @@ export function AiEditTab({
   fps,
   unavailableReason,
   suggest = suggestAiEdits,
-  onApply = (clipId, properties) => edit.setClipProperties([clipId], properties),
+  onApply = (clipId, properties) =>
+    edit.setClipProperties([clipId], { ...properties, respectProtectedFields: true }),
   onUndo = edit.undo,
 }: {
   clip: Clip;

@@ -44,7 +44,7 @@ pub use audio::{AudioDenoise, DenoiseMode, LoudnessNormalization};
 pub use caption_sync::{caption_group_ids, clips_in_group, sync_caption_group_style};
 pub use clip::{
     CaptionTranslationInput, Clip, FadeEdge, KeyframeTrackWireField, KeyframeValueWireShape,
-    VolumeScale,
+    ProtectedField, VolumeScale,
 };
 pub use clip_type::ClipType;
 pub use grade::{
@@ -69,7 +69,7 @@ pub use signal::{
 pub use split::split_clip;
 pub use stabilization::{StabilizationKeyframe, StabilizationTrack, StabilizationTransform};
 pub use subtitle_export::{collect_caption_cues, export_srt, export_vtt, SubtitleCue};
-pub use text::{Fill, Rgba, Shadow, TextAlignment, TextLayout, TextStyle};
+pub use text::{Fill, Rgba, Shadow, TextAlignment, TextLayout, TextStyle, TextStylePatch};
 pub use timeline::{
     ClipLocation, NestedSequence, ScriptAssemblyPlan, ScriptAssemblySegment, Timeline, Track,
     VoiceModelRecord,

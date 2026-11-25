@@ -274,6 +274,33 @@ impl Default for TextStyle {
     }
 }
 
+/// A partial text-style write. Unset fields keep the clip's current values,
+/// so changing font size does not reset color, alignment, shadow, or fills.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TextStylePatch {
+    pub font_name: Option<String>,
+    pub font_size: Option<f64>,
+    pub font_scale: Option<f64>,
+    pub color: Option<Rgba>,
+    pub alignment: Option<TextAlignment>,
+    pub shadow: Option<Shadow>,
+    pub background: Option<Fill>,
+    pub border: Option<Fill>,
+}
+
+impl TextStylePatch {
+    pub fn is_empty(&self) -> bool {
+        self.font_name.is_none()
+            && self.font_size.is_none()
+            && self.font_scale.is_none()
+            && self.color.is_none()
+            && self.alignment.is_none()
+            && self.shadow.is_none()
+            && self.background.is_none()
+            && self.border.is_none()
+    }
+}
+
 /// Natural bounding size of a rendered text clip. 1:1 port of constants and the
 /// canvas-scale basis from `TextLayout.swift`.
 ///

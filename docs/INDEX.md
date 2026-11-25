@@ -15,6 +15,7 @@
 - [当日运行验证](audit/2026-09-06/public-beta-validation.md)：主代理维护，未执行门槛仍标为待验证。
 - [Sticker 专项记录](audit/2026-09-06/sticker-panel.md)：源码和定向检查；安装包实际操作见当日总验收。
 - [项目规范与意图](project/index.md) · [文档同步报告](documentation-sync-2026-09-06.md)。
+- [个人 Mac 初剪工作台](workbench/personal-mac-workbench.md)：本轮最小闭环的操作、测试和未验证项。
 
 ## 🧭 如何使用本文档树
 

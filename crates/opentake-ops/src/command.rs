@@ -720,8 +720,15 @@ pub struct ClipProperties {
     pub transform: Option<Transform>,
     pub text_content: Option<String>,
     /// Text style for a text clip (font / size / color / alignment / shadow /
-    /// background / border). Replaces the clip's whole `text_style`.
+    /// background / border). Replaces the clip's whole `text_style`, except
+    /// when [`Self::respect_protected_fields`] is set: locked subfields stay.
     pub text_style: Option<opentake_domain::TextStyle>,
+    /// Merges only the fields it carries. Unset style fields stay as they are,
+    /// including a hand-tuned color that this patch does not mention.
+    pub text_style_patch: Option<opentake_domain::TextStylePatch>,
+    /// When true, fields listed on the clip's `protected_fields` are not written.
+    /// User edits leave this false and can still change a locked field.
+    pub respect_protected_fields: bool,
     /// Per-clip crop insets (normalized 0–1). Setting this clears `crop_track`.
     pub crop: Option<Crop>,
     /// Fade-in length in frames. Setting this clamps to the clip duration.
@@ -920,6 +927,19 @@ pub enum EditCommand {
     SetClipProperties {
         clip_ids: Vec<String>,
         properties: Box<ClipProperties>,
+    },
+    /// Replace one clip's user lock list. An empty list clears the locks.
+    /// This is a manual action and is not itself blocked by the previous locks.
+    SetProtectedFields {
+        clip_id: String,
+        fields: Vec<opentake_domain::ProtectedField>,
+    },
+    /// Place the caller's media in the given order on fresh tracks, with an
+    /// optional title the caller wrote. Does not classify or reorder.
+    PlaceUserRoughCut {
+        items: Vec<crate::workbench::UserRoughCutItem>,
+        title: Option<String>,
+        title_duration_frames: i32,
     },
     /// Apply clip-specific property bundles as one atomic undoable edit. This is
     /// used when a shared partial transform has to be resolved against each
@@ -1335,6 +1355,14 @@ pub fn apply(
             clip_ids,
             properties,
         } => set_clip_properties(state, clip_ids, *properties),
+        EditCommand::SetProtectedFields { clip_id, fields } => {
+            set_protected_fields(state, clip_id, fields)
+        }
+        EditCommand::PlaceUserRoughCut {
+            items,
+            title,
+            title_duration_frames,
+        } => place_user_rough_cut(state, items, title, title_duration_frames, ids),
         EditCommand::SetClipPropertiesPerClip { assignments } => {
             set_clip_properties_per_clip(state, assignments)
         }
@@ -3914,6 +3942,9 @@ fn validate_clip_property_target(
         .find_clip(clip_id)
         .ok_or_else(|| EditError::Invalid(format!("Clip not found: {clip_id}")))?;
     let clip = &state.timeline.tracks[location.track_index].clips[location.clip_index];
+    if let Some(patch) = &props.text_style_patch {
+        validate_text_style_patch(patch)?;
+    }
     if clip.nested_sequence_id.is_some()
         && (props
             .speed
@@ -3921,7 +3952,8 @@ fn validate_clip_property_target(
             || props.reversed == Some(true)
             || props.crop.is_some_and(|crop| crop != Crop::default())
             || props.text_content.is_some()
-            || props.text_style.is_some())
+            || props.text_style.is_some()
+            || props.text_style_patch.is_some())
     {
         return Err(EditError::Invalid(format!(
             "compound clip {clip_id} does not support retime, reverse, crop, or text properties"
@@ -4041,6 +4073,156 @@ fn set_clip_properties(
                 apply_property_changes(&mut st.timeline, pid, &partner_props, true);
             }
             Ok(clip_ids.clone())
+        },
+    )
+}
+
+fn set_protected_fields(
+    state: &mut EditorState,
+    clip_id: String,
+    fields: Vec<opentake_domain::ProtectedField>,
+) -> Result<EditResult, EditError> {
+    if state.find_clip(&clip_id).is_none() {
+        return Err(EditError::Invalid(format!("Clip not found: {clip_id}")));
+    }
+    let mut normalized = Vec::new();
+    for field in fields {
+        if !normalized.contains(&field) {
+            normalized.push(field);
+        }
+    }
+    let summary_id = clip_id.clone();
+    transact(
+        state,
+        "Set Protected Fields",
+        move |_| format!("Updated field protection for {summary_id}"),
+        move |st| {
+            let (track_index, clip_index) =
+                find(&st.timeline, &clip_id).expect("protected-field target was preflighted");
+            st.timeline.tracks[track_index].clips[clip_index].protected_fields = normalized;
+            Ok(vec![clip_id])
+        },
+    )
+}
+
+fn place_user_rough_cut(
+    state: &mut EditorState,
+    items: Vec<crate::workbench::UserRoughCutItem>,
+    title: Option<String>,
+    title_duration_frames: i32,
+    ids: &dyn IdGen,
+) -> Result<EditResult, EditError> {
+    let plan = crate::workbench::plan_user_rough_cut(&items, title, title_duration_frames)
+        .map_err(|error| {
+            EditError::Invalid(match error {
+                crate::workbench::RoughCutError::Empty => {
+                    "rough cut needs at least one item".into()
+                }
+                crate::workbench::RoughCutError::TitleDuration => {
+                    "title duration must be at least 1 frame".into()
+                }
+                crate::workbench::RoughCutError::InvalidItem { index, reason } => {
+                    format!("rough cut item {index}: {reason}")
+                }
+            })
+        })?;
+    let has_visual = plan
+        .clips
+        .iter()
+        .any(|clip| clip.media_type != ClipType::Audio);
+    let has_audio_only = plan
+        .clips
+        .iter()
+        .any(|clip| clip.media_type == ClipType::Audio);
+    transact(
+        state,
+        "Place User Rough Cut",
+        |added| format!("Placed {} rough-cut clip(s)", added.len()),
+        move |st| {
+            let visual_track_id = has_visual.then(|| {
+                let index = ops::insert_track(&mut st.timeline, 0, ClipType::Video, ids);
+                st.timeline.tracks[index].id.clone()
+            });
+            let audio_track_id = has_audio_only.then(|| {
+                let at = st.timeline.tracks.len();
+                let index = ops::insert_track(&mut st.timeline, at, ClipType::Audio, ids);
+                st.timeline.tracks[index].id.clone()
+            });
+            let mut placed = Vec::new();
+            for clip in &plan.clips {
+                let track_id = if clip.media_type == ClipType::Audio {
+                    audio_track_id.clone()
+                } else {
+                    visual_track_id.clone()
+                }
+                .expect("rough cut track was created for this media type");
+                let Some(track_index) = st.track_index(&track_id) else {
+                    return Err(EditError::Invalid(
+                        "rough cut track disappeared before placement".into(),
+                    ));
+                };
+                let entry = ClipEntry {
+                    media_ref: clip.media_ref.clone(),
+                    media_type: clip.media_type,
+                    source_clip_type: clip.media_type,
+                    track_index,
+                    start_frame: clip.start_frame,
+                    duration_frames: clip.duration_frames,
+                    trim_start_frame: None,
+                    trim_end_frame: None,
+                    has_audio: clip.has_audio,
+                    add_linked_audio: clip.add_linked_audio,
+                    transform: None,
+                };
+                let spec = entry.to_spec();
+                let Some(track_index) = st.track_index(&track_id) else {
+                    return Err(EditError::Invalid(
+                        "rough cut track disappeared before placement".into(),
+                    ));
+                };
+                let added = ops::place_clip(&mut st.timeline, &spec, track_index, None, ids);
+                if added.is_empty() {
+                    return Err(EditError::Invalid(format!(
+                        "could not place rough cut item {}",
+                        clip.media_ref
+                    )));
+                }
+                placed.extend(added);
+            }
+            if let Some(title) = &plan.title {
+                let index = ops::insert_track(&mut st.timeline, 0, ClipType::Video, ids);
+                let track_id = st.timeline.tracks[index].id.clone();
+                let entry = ClipEntry {
+                    media_ref: String::new(),
+                    media_type: ClipType::Text,
+                    source_clip_type: ClipType::Text,
+                    track_index: index,
+                    start_frame: 0,
+                    duration_frames: title.duration_frames,
+                    trim_start_frame: None,
+                    trim_end_frame: None,
+                    has_audio: false,
+                    add_linked_audio: false,
+                    transform: Some(title.transform),
+                };
+                let spec = entry.to_spec();
+                let Some(track_index) = st.track_index(&track_id) else {
+                    return Err(EditError::Invalid(
+                        "title track disappeared before placement".into(),
+                    ));
+                };
+                let ids_placed = ops::place_clip(&mut st.timeline, &spec, track_index, None, ids);
+                let Some(text_id) = ids_placed.first().cloned() else {
+                    return Err(EditError::Invalid("title clip was not placed".into()));
+                };
+                let (track_index, clip_index) = find(&st.timeline, &text_id)
+                    .ok_or_else(|| EditError::Invalid("title clip was not placed".into()))?;
+                let text = &mut st.timeline.tracks[track_index].clips[clip_index];
+                text.text_content = Some(title.content.clone());
+                text.text_style = Some(title.text_style.clone());
+                placed.push(text_id);
+            }
+            Ok(placed)
         },
     )
 }
@@ -4303,7 +4485,7 @@ fn apply_property_changes(
         clip.opacity_track = None;
     }
     if let Some(t) = props.transform {
-        clip.transform = t;
+        apply_transform(clip, t, props.respect_protected_fields);
     }
     if let Some(c) = props.crop {
         clip.crop = c;
@@ -4333,12 +4515,178 @@ fn apply_property_changes(
         clip.reversed = reversed;
     }
     if let Some(c) = &props.text_content {
-        clip.text_content = Some(c.clone());
-        clip.caption_translation_input = None;
+        if !field_locked(
+            clip,
+            opentake_domain::ProtectedField::TextContent,
+            props.respect_protected_fields,
+        ) {
+            clip.text_content = Some(c.clone());
+            clip.caption_translation_input = None;
+        }
     }
     if let Some(s) = &props.text_style {
-        clip.text_style = Some(s.clone());
+        apply_text_style(clip, s, props.respect_protected_fields);
     }
+    if let Some(patch) = &props.text_style_patch {
+        apply_text_style_patch(clip, patch, props.respect_protected_fields);
+    }
+}
+
+fn field_locked(clip: &Clip, field: opentake_domain::ProtectedField, respect: bool) -> bool {
+    respect && clip.protected_fields.contains(&field)
+}
+
+fn apply_transform(clip: &mut Clip, incoming: Transform, respect: bool) {
+    if !respect {
+        clip.transform = incoming;
+        return;
+    }
+    if !field_locked(
+        clip,
+        opentake_domain::ProtectedField::TransformPosition,
+        true,
+    ) {
+        clip.transform.center_x = incoming.center_x;
+        clip.transform.center_y = incoming.center_y;
+    }
+    if !field_locked(clip, opentake_domain::ProtectedField::TransformScale, true) {
+        clip.transform.width = incoming.width;
+        clip.transform.height = incoming.height;
+    }
+    if !field_locked(
+        clip,
+        opentake_domain::ProtectedField::TransformRotation,
+        true,
+    ) {
+        clip.transform.rotation = incoming.rotation;
+    }
+    clip.transform.flip_horizontal = incoming.flip_horizontal;
+    clip.transform.flip_vertical = incoming.flip_vertical;
+}
+
+fn apply_text_style(clip: &mut Clip, incoming: &opentake_domain::TextStyle, respect: bool) {
+    if !respect {
+        clip.text_style = Some(incoming.clone());
+        return;
+    }
+    let protected = clip.protected_fields.clone();
+    let mut style = clip.text_style.clone().unwrap_or_default();
+    let mut wrote = false;
+    let keep = |field: opentake_domain::ProtectedField| protected.contains(&field);
+    if !keep(opentake_domain::ProtectedField::TextFontName) {
+        style.font_name = incoming.font_name.clone();
+        wrote = true;
+    }
+    if !keep(opentake_domain::ProtectedField::TextFontSize) {
+        style.font_size = incoming.font_size;
+        wrote = true;
+    }
+    if !keep(opentake_domain::ProtectedField::TextFontScale) {
+        style.font_scale = incoming.font_scale;
+        wrote = true;
+    }
+    if !keep(opentake_domain::ProtectedField::TextColor) {
+        style.color = incoming.color;
+        wrote = true;
+    }
+    if !keep(opentake_domain::ProtectedField::TextAlignment) {
+        style.alignment = incoming.alignment;
+        wrote = true;
+    }
+    if !keep(opentake_domain::ProtectedField::TextShadow) {
+        style.shadow = incoming.shadow;
+        wrote = true;
+    }
+    if !keep(opentake_domain::ProtectedField::TextBackground) {
+        style.background = incoming.background;
+        wrote = true;
+    }
+    if !keep(opentake_domain::ProtectedField::TextBorder) {
+        style.border = incoming.border;
+        wrote = true;
+    }
+    if wrote {
+        clip.text_style = Some(style);
+    }
+}
+
+fn apply_text_style_patch(clip: &mut Clip, patch: &opentake_domain::TextStylePatch, respect: bool) {
+    if patch.is_empty() {
+        return;
+    }
+    let protected = clip.protected_fields.clone();
+    let mut style = clip.text_style.clone().unwrap_or_default();
+    let mut wrote = false;
+    let keep = |field: opentake_domain::ProtectedField| respect && protected.contains(&field);
+    if let Some(value) = &patch.font_name {
+        if !keep(opentake_domain::ProtectedField::TextFontName) {
+            style.font_name = value.clone();
+            wrote = true;
+        }
+    }
+    if let Some(value) = patch.font_size {
+        if !keep(opentake_domain::ProtectedField::TextFontSize) {
+            style.font_size = value;
+            wrote = true;
+        }
+    }
+    if let Some(value) = patch.font_scale {
+        if !keep(opentake_domain::ProtectedField::TextFontScale) {
+            style.font_scale = value;
+            wrote = true;
+        }
+    }
+    if let Some(value) = patch.color {
+        if !keep(opentake_domain::ProtectedField::TextColor) {
+            style.color = value;
+            wrote = true;
+        }
+    }
+    if let Some(value) = patch.alignment {
+        if !keep(opentake_domain::ProtectedField::TextAlignment) {
+            style.alignment = value;
+            wrote = true;
+        }
+    }
+    if let Some(value) = patch.shadow {
+        if !keep(opentake_domain::ProtectedField::TextShadow) {
+            style.shadow = value;
+            wrote = true;
+        }
+    }
+    if let Some(value) = patch.background {
+        if !keep(opentake_domain::ProtectedField::TextBackground) {
+            style.background = value;
+            wrote = true;
+        }
+    }
+    if let Some(value) = patch.border {
+        if !keep(opentake_domain::ProtectedField::TextBorder) {
+            style.border = value;
+            wrote = true;
+        }
+    }
+    if wrote {
+        clip.text_style = Some(style);
+    }
+}
+
+fn validate_text_style_patch(patch: &opentake_domain::TextStylePatch) -> Result<(), EditError> {
+    if let Some(size) = patch.font_size {
+        if !size.is_finite() || size <= 0.0 {
+            return Err(EditError::Invalid(
+                "font size must be finite and > 0".into(),
+            ));
+        }
+    }
+    if let Some(scale) = patch.font_scale {
+        if !scale.is_finite() || scale <= 0.0 {
+            return Err(EditError::Invalid(
+                "font scale must be finite and > 0".into(),
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn apply_caption_translations(
@@ -7666,6 +8014,163 @@ mod text_style_property_tests {
         assert_eq!(clip.text_content.as_deref(), Some("Updated"));
         assert_eq!(clip.text_style.as_ref().unwrap().font_size, 120.0);
     }
+
+    fn styled(size: f64, alignment: TextAlignment) -> opentake_domain::TextStyle {
+        opentake_domain::TextStyle {
+            font_name: "Songti".into(),
+            font_size: size,
+            alignment,
+            color: opentake_domain::Rgba::new(0.2, 0.3, 0.4, 1.0),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn text_style_patch_keeps_unmentioned_manual_style() {
+        let mut state = state_with_text_clip();
+        let ids = SeqIdGen::default();
+        state.timeline.tracks[0].clips[0].text_style = Some(styled(80.0, TextAlignment::Right));
+        apply(
+            &mut state,
+            EditCommand::SetClipProperties {
+                clip_ids: vec!["c1".into()],
+                properties: Box::new(ClipProperties {
+                    text_style_patch: Some(opentake_domain::TextStylePatch {
+                        font_size: Some(42.0),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }),
+            },
+            &ids,
+        )
+        .unwrap();
+        let style = state.timeline.tracks[0].clips[0]
+            .text_style
+            .clone()
+            .unwrap();
+        assert_eq!(style.font_size, 42.0);
+        assert_eq!(style.font_name, "Songti");
+        assert_eq!(style.alignment, TextAlignment::Right);
+        assert_eq!(style.color, opentake_domain::Rgba::new(0.2, 0.3, 0.4, 1.0));
+    }
+
+    #[test]
+    fn automatic_edit_does_not_overwrite_locked_fields_and_user_edit_can() {
+        let mut state = state_with_text_clip();
+        let ids = SeqIdGen::default();
+        state.timeline.tracks[0].clips[0].text_style = Some(styled(80.0, TextAlignment::Left));
+        state.timeline.tracks[0].clips[0].transform.center_y = 0.2;
+        apply(
+            &mut state,
+            EditCommand::SetProtectedFields {
+                clip_id: "c1".into(),
+                fields: vec![
+                    opentake_domain::ProtectedField::TextFontSize,
+                    opentake_domain::ProtectedField::TextColor,
+                    opentake_domain::ProtectedField::TransformPosition,
+                    opentake_domain::ProtectedField::TextFontSize,
+                ],
+            },
+            &ids,
+        )
+        .unwrap();
+        assert_eq!(
+            state.timeline.tracks[0].clips[0].protected_fields,
+            vec![
+                opentake_domain::ProtectedField::TextFontSize,
+                opentake_domain::ProtectedField::TextColor,
+                opentake_domain::ProtectedField::TransformPosition,
+            ]
+        );
+
+        let automatic = ClipProperties {
+            text_style: Some(opentake_domain::TextStyle {
+                font_name: "Helvetica".into(),
+                font_size: 12.0,
+                alignment: TextAlignment::Center,
+                color: opentake_domain::Rgba::new(1.0, 0.0, 0.0, 1.0),
+                ..Default::default()
+            }),
+            transform: Some(Transform {
+                center_x: 0.9,
+                center_y: 0.9,
+                rotation: 15.0,
+                ..Default::default()
+            }),
+            respect_protected_fields: true,
+            ..Default::default()
+        };
+        let res = apply(
+            &mut state,
+            EditCommand::SetClipProperties {
+                clip_ids: vec!["c1".into()],
+                properties: Box::new(automatic),
+            },
+            &ids,
+        )
+        .unwrap();
+        assert!(res.changed);
+        let clip = &state.timeline.tracks[0].clips[0];
+        let style = clip.text_style.as_ref().unwrap();
+        assert_eq!(style.font_size, 80.0);
+        assert_eq!(style.color, opentake_domain::Rgba::new(0.2, 0.3, 0.4, 1.0));
+        assert_eq!(style.font_name, "Helvetica");
+        assert_eq!(style.alignment, TextAlignment::Center);
+        assert_eq!(clip.transform.center_x, 0.5);
+        assert_eq!(clip.transform.center_y, 0.2);
+        assert_eq!(clip.transform.rotation, 15.0);
+
+        let json = serde_json::to_string(&state.timeline).unwrap();
+        let restored: opentake_domain::Timeline = serde_json::from_str(&json).unwrap();
+        let mut state = EditorState::from_timeline(restored);
+        apply(
+            &mut state,
+            EditCommand::SetClipProperties {
+                clip_ids: vec!["c1".into()],
+                properties: Box::new(ClipProperties {
+                    text_style_patch: Some(opentake_domain::TextStylePatch {
+                        font_size: Some(11.0),
+                        ..Default::default()
+                    }),
+                    respect_protected_fields: true,
+                    ..Default::default()
+                }),
+            },
+            &ids,
+        )
+        .unwrap();
+        assert_eq!(
+            state.timeline.tracks[0].clips[0]
+                .text_style
+                .as_ref()
+                .unwrap()
+                .font_size,
+            80.0
+        );
+
+        apply(
+            &mut state,
+            EditCommand::SetClipProperties {
+                clip_ids: vec!["c1".into()],
+                properties: Box::new(ClipProperties {
+                    text_style_patch: Some(opentake_domain::TextStylePatch {
+                        font_size: Some(64.0),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }),
+            },
+            &ids,
+        )
+        .unwrap();
+        let clip = &state.timeline.tracks[0].clips[0];
+        assert_eq!(clip.text_style.as_ref().unwrap().font_size, 64.0);
+        assert_eq!(clip.text_style.as_ref().unwrap().font_name, "Helvetica");
+        assert!(clip
+            .protected_fields
+            .contains(&opentake_domain::ProtectedField::TextFontSize));
+    }
 }
 
 #[cfg(test)]
@@ -8913,5 +9418,68 @@ mod freeze_frame_tests {
             .unwrap();
         assert_eq!(c2.start_frame, 190);
         assert_eq!(c2.end_frame(), 250);
+    }
+}
+
+#[cfg(test)]
+mod user_rough_cut_tests {
+    use super::*;
+    use crate::id::SeqIdGen;
+    use crate::workbench::UserRoughCutItem;
+    use opentake_domain::ClipType;
+
+    #[test]
+    fn places_selected_media_in_order_with_the_typed_title() {
+        let mut state = EditorState::default();
+        let ids = SeqIdGen::default();
+        let result = apply(
+            &mut state,
+            EditCommand::PlaceUserRoughCut {
+                items: vec![
+                    UserRoughCutItem {
+                        media_ref: "synth-a".into(),
+                        media_type: ClipType::Video,
+                        duration_frames: 12,
+                        has_audio: true,
+                    },
+                    UserRoughCutItem {
+                        media_ref: "synth-b".into(),
+                        media_type: ClipType::Image,
+                        duration_frames: 8,
+                        has_audio: false,
+                    },
+                ],
+                title: Some("合成标题".into()),
+                title_duration_frames: 20,
+            },
+            &ids,
+        )
+        .unwrap();
+        assert!(result.changed);
+        let visual: Vec<_> = state
+            .timeline
+            .tracks
+            .iter()
+            .filter(|track| track.kind != ClipType::Audio)
+            .collect();
+        assert!(visual.len() >= 2);
+        let title = visual[0].clips.first().unwrap();
+        assert_eq!(title.media_type, ClipType::Text);
+        assert_eq!(title.text_content.as_deref(), Some("合成标题"));
+        assert_eq!(title.text_style.as_ref().unwrap().font_size, 72.0);
+        let footage = visual
+            .iter()
+            .find(|track| track.clips.iter().any(|clip| clip.media_ref == "synth-a"));
+        let footage = footage.unwrap();
+        assert_eq!(footage.clips[0].media_ref, "synth-a");
+        assert_eq!(footage.clips[0].start_frame, 0);
+        assert_eq!(footage.clips[1].media_ref, "synth-b");
+        assert_eq!(footage.clips[1].start_frame, 12);
+        assert!(state
+            .timeline
+            .tracks
+            .iter()
+            .filter(|track| track.kind == ClipType::Audio)
+            .any(|track| track.clips.iter().any(|clip| clip.media_ref == "synth-a")));
     }
 }
